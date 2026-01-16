@@ -1,3 +1,5 @@
+# FILE: app/controllers/discourse_fcm_notifications/push_controller.rb
+
 module ::DiscourseFcmNotifications
   class PushController < ::ApplicationController
     requires_plugin PLUGIN_NAME
@@ -7,21 +9,24 @@ module ::DiscourseFcmNotifications
     skip_before_action :preload_json
 
     def automatic_subscribe
+      params.require(:token)
+
       if params[:token] == "REMOVE"
         DiscourseFcmNotifications::Pusher.unsubscribe(current_user)
-        render json: { success: 'SUCCESS' }
+        render json: success_json
       else
+        # Update the user's token
         DiscourseFcmNotifications::Pusher.subscribe(current_user, params[:token])
+
+        # Send a silent confirmation push to verify the link
         if DiscourseFcmNotifications::Pusher.confirm_subscribe(current_user)
-          #flash.now[:notice] = "You have successfully subscribed to push notifications."
-          render json: { success: 'SUCCESS' }
+          render json: { success: 'SUCCESS', token_status: 'verified' }
         else
-          #flash.now[:alert] = "There was an error subscribing to push notifications."
-          render json: { failed: 'FAILED', error: I18n.t("discourse_fcm_notifications.subscribe_error") }
+          render json: { failed: 'FAILED', error: "Token accepted but verification push failed." }
         end
       end
     end
-    
+
     def subscribe
       if current_user.custom_fields[DiscourseFcmNotifications::PLUGIN_NAME] != params[:subscription]
         DiscourseFcmNotifications::Pusher.subscribe(current_user, params[:subscription])

@@ -1,5 +1,8 @@
+# FILE: config/routes.rb
+
 DiscourseFcmNotifications::Engine.routes.draw do
-  get '/automatic_subscribe' => 'push#automatic_subscribe'
+  # Changed from get to post for security
+  post '/automatic_subscribe' => 'push#automatic_subscribe'
   post '/subscribe' => 'push#subscribe'
   post '/unsubscribe' => 'push#unsubscribe'
 end
