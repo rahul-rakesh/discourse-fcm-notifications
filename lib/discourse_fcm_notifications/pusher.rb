@@ -1,110 +1,241 @@
-# FILE: lib/discourse_fcm_notifications/pusher.rb
-
 # frozen_string_literal: true
+
 require "net/https"
 
-module ::DiscourseFcmNotifications
+module DiscourseFcmNotifications
   class Pusher
+    class << self
+      def push(user, payload)
+        return false unless user && payload
 
-    def self.push(user, payload)
-      message = {
-        title: I18n.t(
-          "discourse_fcm_notifications.popup.#{Notification.types[payload[:notification_type]]}",
-          site_title: SiteSetting.title,
-          topic: payload[:topic_title],
-          username: payload[:username]
-        ),
-        message: payload[:excerpt],
-        url: "#{Discourse.base_url}/#{payload[:post_url]}"
-      }
-      self.send_notification(user, message)
-    end
+        tokens = FcmToken.active.for_user(user.id)
 
-    def self.confirm_subscribe(user)
-      message = {
-        title: I18n.t(
-          "discourse_fcm_notifications.confirm_title",
-          site_title: SiteSetting.title,
-          ),
-        message: I18n.t("discourse_fcm_notifications.confirm_body"),
-        url: "#{Discourse.base_url}"
-      }
-      self.send_notification(user, message)
-    end
+        if tokens.empty?
+          log_info("No active FCM tokens for user #{user.username} (id: #{user.id})")
+          return false
+        end
 
-    def self.subscribe(user, subscription)
-      user.custom_fields[DiscourseFcmNotifications::PLUGIN_NAME] = subscription
-      user.save_custom_fields(true)
-    end
+        notification_type = Notification.types[payload[:notification_type]]
+        message_content = build_message(payload)
 
-    def self.unsubscribe(user)
-      user.custom_fields.delete(DiscourseFcmNotifications::PLUGIN_NAME)
-      user.save_custom_fields(true)
-    end
+        success_count = 0
+        tokens.each do |fcm_token|
+          result =
+            send_to_token(
+              user: user,
+              fcm_token: fcm_token,
+              message_content: message_content,
+              notification_type: notification_type,
+            )
+          success_count += 1 if result
+        end
 
-    private
+        log_info(
+          "Sent to #{success_count}/#{tokens.count} devices for #{user.username} (notification_type: #{notification_type})",
+        )
+        success_count > 0
+      end
 
-    def self.send_notification(user, message_hash)
-      return unless user && message_hash
+      def confirm_subscribe(user, fcm_token)
+        message_content = {
+          title: I18n.t("discourse_fcm_notifications.confirm_title", site_title: SiteSetting.title),
+          message: I18n.t("discourse_fcm_notifications.confirm_body"),
+          url: Discourse.base_url.to_s,
+        }
 
-      token = user.custom_fields[DiscourseFcmNotifications::PLUGIN_NAME]
-      return if token.blank?
+        send_to_token(
+          user: user,
+          fcm_token: fcm_token,
+          message_content: message_content,
+          notification_type: "confirmation",
+        )
+      end
 
-      begin
-        Rails.logger.info "Sending FCM notification to #{user.username}: #{message_hash[:title]}"
+      def subscribe(user:, token:, platform: nil, device_name: nil)
+        fcm_token =
+          FcmToken.register(user: user, token: token, platform: platform, device_name: device_name)
 
-        # Use a temporary file path that is safer within Docker/Linux environments
+        log_info(
+          "Registered FCM token for #{user.username} (platform: #{platform || "unknown"}, token_id: #{fcm_token.id})",
+        )
+        fcm_token
+      rescue StandardError => e
+        log_error("Failed to register token for #{user.username}: #{e.message}")
+        nil
+      end
+
+      def unsubscribe(user:, token: nil)
+        count = FcmToken.unregister(user: user, token: token)
+        log_info("Unregistered #{count || "all"} FCM token(s) for #{user.username}")
+        true
+      rescue StandardError => e
+        log_error("Failed to unregister token for #{user.username}: #{e.message}")
+        false
+      end
+
+      private
+
+      def send_to_token(user:, fcm_token:, message_content:, notification_type:)
+        log_entry =
+          FcmNotificationLog.log_attempt(
+            user: user,
+            fcm_token: fcm_token,
+            notification_type: notification_type,
+            payload: message_content,
+          )
+
+        begin
+          fcm_client = get_fcm_client
+          message = build_fcm_message(fcm_token.token, message_content)
+
+          log_info(
+            "Sending FCM to #{user.username} (token_id: #{fcm_token.id}, platform: #{fcm_token.platform || "unknown"})",
+          )
+
+          response = fcm_client.send_v1(message)
+
+          if response[:response] == "success"
+            fcm_token.mark_success!
+            log_entry.mark_sent!(response_code: 200)
+            log_info(
+              "Successfully sent to #{user.username} (token_id: #{fcm_token.id}, log_id: #{log_entry.id})",
+            )
+            true
+          else
+            handle_fcm_error(user, fcm_token, log_entry, response)
+            false
+          end
+        rescue StandardError => e
+          log_entry.mark_failed!(e.message)
+          log_error(
+            "Exception sending to #{user.username} (token_id: #{fcm_token.id}): #{e.class.name} - #{e.message}",
+          )
+          log_error("Backtrace: #{e.backtrace.first(5).join("\n")}") if e.backtrace
+          false
+        end
+      end
+
+      def handle_fcm_error(user, fcm_token, log_entry, response)
+        status_code = response[:status_code]
+        error_body = response[:body]
+
+        log_entry.mark_sent!(response_code: status_code, response_body: error_body)
+
+        case status_code
+        when 400
+          fcm_token.mark_failure!("Invalid request: #{error_body}")
+          log_error(
+            "FCM 400 Bad Request for #{user.username} (token_id: #{fcm_token.id}): #{error_body}",
+          )
+        when 401
+          log_error("FCM 401 Unauthorized - check server credentials! Response: #{error_body}")
+        when 403
+          log_error(
+            "FCM 403 Forbidden for #{user.username} (token_id: #{fcm_token.id}) - check project permissions: #{error_body}",
+          )
+        when 404, 410
+          log_warn(
+            "FCM token expired/invalid for #{user.username} (token_id: #{fcm_token.id}), removing. Status: #{status_code}",
+          )
+          fcm_token.destroy
+        when 429
+          log_warn("FCM rate limited (429) - will retry later")
+        else
+          fcm_token.mark_failure!("HTTP #{status_code}: #{error_body}")
+          log_error(
+            "FCM Error #{status_code} for #{user.username} (token_id: #{fcm_token.id}): #{error_body}",
+          )
+        end
+      end
+
+      def build_message(payload)
+        notification_type = Notification.types[payload[:notification_type]]
+        {
+          title:
+            I18n.t(
+              "discourse_fcm_notifications.popup.#{notification_type}",
+              site_title: SiteSetting.title,
+              topic: payload[:topic_title],
+              username: payload[:username],
+            ),
+          message: payload[:excerpt],
+          url: "#{Discourse.base_url}/#{payload[:post_url]}",
+        }
+      end
+
+      def build_fcm_message(token, message_content)
+        {
+          token: token,
+          data: {
+            "linked_obj_type" => "link",
+            "linked_obj_data" => message_content[:url],
+          },
+          notification: {
+            title: message_content[:title],
+            body: message_content[:message],
+          },
+          android: {
+            priority: "high",
+          },
+          apns: {
+            headers: {
+              "apns-priority": "10",
+            },
+            payload: {
+              aps: {
+                sound: "default",
+                "interruption-level": "active",
+              },
+            },
+          },
+        }
+      end
+
+      def get_fcm_client
         filename = Rails.root.join("tmp", "gcp_key.json").to_s
 
         if !File.exist?(filename) && SiteSetting.fcm_notifications_google_json.present?
           File.write(filename, SiteSetting.fcm_notifications_google_json)
+          log_info("Wrote GCP credentials to #{filename}")
         end
 
-        raise "Error: Missing google json for push notifications" unless File.exist?(filename)
-
-        fcm = FCM.new(SiteSetting.fcm_notifications_api_key, filename, SiteSetting.fcm_notifications_project_id)
-
-        message = {
-          'token': token,
-          'data': {
-            "linked_obj_type" => 'link',
-            "linked_obj_data" => message_hash[:url],
-          },
-          'notification': {
-            title: message_hash[:title],
-            body: message_hash[:message],
-          },
-          'android': {
-            "priority": "high", # Changed to high for instant delivery
-          },
-          'apns': {
-            headers: { "apns-priority": "10" }, # Changed to 10 for instant delivery
-            payload: {
-              aps: {
-                "sound": "default",
-                "interruption-level": "active"
-              }
-            },
-          }
-        }
-
-        response = fcm.send_v1(message)
-
-        if response[:response] == 'success'
-          return true
-        else
-          # If token is invalid, automatically unsubscribe to keep DB clean
-          if response[:status_code] == 404 || response[:status_code] == 410
-            Rails.logger.warn "FCM token expired for #{user.username}. Unsubscribing."
-            self.unsubscribe(user)
-          else
-            Rails.logger.error "FCM Error (#{response[:status_code]}): #{response[:body]}"
-          end
-          return false
+        unless File.exist?(filename)
+          raise "Missing Google JSON for push notifications. Configure fcm_notifications_google_json in site settings."
         end
-      rescue => e
-        Rails.logger.error "FCM Exception for #{user.username}: #{e.message}"
-        return false
+
+        FCM.new(
+          SiteSetting.fcm_notifications_api_key,
+          filename,
+          SiteSetting.fcm_notifications_project_id,
+        )
+      end
+
+      def log_info(message)
+        Rails.logger.info("[FCM] #{message}")
+        store_last_log("info", message)
+      end
+
+      def log_warn(message)
+        Rails.logger.warn("[FCM] #{message}")
+        store_last_log("warn", message)
+      end
+
+      def log_error(message)
+        Rails.logger.error("[FCM] #{message}")
+        store_last_log("error", message)
+        PluginStore.set(
+          PLUGIN_NAME,
+          "last_error",
+          { message: message, timestamp: Time.current.iso8601 },
+        )
+      end
+
+      def store_last_log(level, message)
+        PluginStore.set(
+          PLUGIN_NAME,
+          "last_log",
+          { level: level, message: message, timestamp: Time.current.iso8601 },
+        )
       end
     end
   end
