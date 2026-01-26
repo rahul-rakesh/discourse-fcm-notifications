@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(bin/lint:*)"
+      "Bash(bin/lint:*)",
+      "Bash(bin/rails runner:*)",
+      "Bash(psql:*)"
     ]
   }
 }

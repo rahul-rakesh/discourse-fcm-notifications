@@ -150,15 +150,37 @@ module DiscourseFcmNotifications
 
       def build_message(payload)
         notification_type = Notification.types[payload[:notification_type]]
+        topic_title = payload[:topic_title].to_s
+        username = payload[:username].to_s
+
+        # Smart title: try specific translation, fallback to generic with topic title
+        title =
+          I18n.t(
+            "discourse_fcm_notifications.popup.#{notification_type}",
+            site_title: SiteSetting.title,
+            topic: topic_title,
+            username: username,
+            default: nil,
+          )
+
+        # Fallback: use topic title directly (best UX for listings/classifieds)
+        if title.nil?
+          title =
+            if topic_title.present?
+              "#{username} in \"#{topic_title}\""
+            else
+              "New notification from #{username}"
+            end
+        end
+
+        # Clean excerpt: strip image placeholders, use topic_title if empty/only images
+        excerpt = payload[:excerpt].to_s
+        clean_excerpt = excerpt.gsub(/\[IMG[^\]]*\]|\[image[^\]]*\]/i, "").strip
+        clean_excerpt = topic_title if clean_excerpt.blank? || clean_excerpt =~ /^\[.*\]$/
+
         {
-          title:
-            I18n.t(
-              "discourse_fcm_notifications.popup.#{notification_type}",
-              site_title: SiteSetting.title,
-              topic: payload[:topic_title],
-              username: payload[:username],
-            ),
-          message: payload[:excerpt],
+          title: title,
+          message: clean_excerpt,
           url: "#{Discourse.base_url}/#{payload[:post_url]}",
         }
       end
