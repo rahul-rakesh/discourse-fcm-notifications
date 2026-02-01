@@ -6,6 +6,8 @@ DiscourseFcmNotifications::Engine.routes.draw do
   post "/subscribe" => "push#subscribe"
   post "/unsubscribe" => "push#unsubscribe"
   get "/status" => "push#status"
+  get "/preferences" => "push#preferences"
+  put "/preferences" => "push#update_preferences"
 
   # Admin endpoints
   scope "/admin", defaults: { format: :json } do

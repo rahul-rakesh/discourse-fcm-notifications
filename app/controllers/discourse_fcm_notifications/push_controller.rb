@@ -63,6 +63,25 @@ module DiscourseFcmNotifications
       render json: success_json
     end
 
+    def preferences
+      preference = FcmNotificationPreference.for_user(current_user.id)
+      render json: { categories: preference.categories_hash }
+    end
+
+    def update_preferences
+      muted = params[:muted_categories]
+      unless muted.is_a?(Array)
+        render json: { error: "muted_categories must be an array" }, status: :bad_request
+        return
+      end
+
+      preference = FcmNotificationPreference.for_user(current_user.id)
+      preference.muted_categories_list = muted
+      preference.save!
+
+      render json: { categories: preference.categories_hash }
+    end
+
     def status
       tokens = FcmToken.for_user(current_user.id)
 

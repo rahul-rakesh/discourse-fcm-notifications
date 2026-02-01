@@ -16,6 +16,17 @@ module DiscourseFcmNotifications
         end
 
         notification_type = Notification.types[payload[:notification_type]]
+        raw_type_id = payload[:notification_type]
+
+        # Check user notification preferences - skip if this type is muted
+        preference = FcmNotificationPreference.for_user(user.id)
+        if preference.persisted? && preference.muted?(raw_type_id)
+          log_info(
+            "Filtered notification for #{user.username} (type: #{notification_type}, raw_id: #{raw_type_id}) - muted by user preference",
+          )
+          return false
+        end
+
         message_content = build_message(payload)
 
         success_count = 0

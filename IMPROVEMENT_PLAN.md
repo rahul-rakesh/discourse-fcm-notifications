@@ -1,8 +1,8 @@
 # FCM Notifications Plugin Improvement Plan
 
-## Implementation Status: ✅ COMPLETE (Phases 1-7)
+## Implementation Status: ✅ COMPLETE (Phases 1-9)
 
-**Last Updated:** 2026-01-24
+**Last Updated:** 2026-02-01
 
 ---
 
@@ -27,7 +27,8 @@ This document outlines the improvements needed for the `discourse-fcm-notificati
 | Phase 5 | Admin Interface | ✅ Complete |
 | Phase 6 | Updated Plugin Entry Point | ✅ Complete |
 | Phase 7 | Migration from Custom Fields | ✅ Complete |
-| Phase 8 | Flutter App Updates | ⏳ Pending (separate repo) |
+| Phase 8 | Flutter App Updates | ✅ Complete |
+| Phase 9 | Notification Preferences (Per-Category Muting) | ✅ Complete |
 
 ---
 
@@ -39,8 +40,10 @@ This document outlines the improvements needed for the `discourse-fcm-notificati
 db/migrate/20250124230246_create_fcm_tokens.rb
 db/migrate/20250124230247_create_fcm_notification_logs.rb
 db/migrate/20250124230248_migrate_custom_fields_to_fcm_tokens.rb
+db/migrate/20250201000001_create_fcm_notification_preferences.rb
 app/models/discourse_fcm_notifications/fcm_token.rb
 app/models/discourse_fcm_notifications/fcm_notification_log.rb
+app/models/discourse_fcm_notifications/fcm_notification_preference.rb
 app/controllers/discourse_fcm_notifications/admin/base_controller.rb
 app/controllers/discourse_fcm_notifications/admin/status_controller.rb
 ```
@@ -159,6 +162,8 @@ curl -H "Api-Key: YOUR_API_KEY" -H "Api-Username: admin" \
 | POST | `/fcm_notifications/subscribe` | Legacy endpoint (redirects to automatic_subscribe) |
 | POST | `/fcm_notifications/unsubscribe` | Unregister token(s) |
 | GET | `/fcm_notifications/status` | Get current user's token status |
+| GET | `/fcm_notifications/preferences` | Get notification category preferences |
+| PUT | `/fcm_notifications/preferences` | Update muted notification categories |
 
 ### Registration Request
 
@@ -325,7 +330,28 @@ Check the `last_error` field on the token to see why it failed.
 
 ---
 
-## Phase 8: Flutter App Updates (Pending)
+## Phase 9: Notification Preferences (Per-Category Muting) ✅ Complete
+
+Users can mute specific notification categories to stop receiving push notifications for those types.
+
+### Server-Side
+- **Migration:** `db/migrate/20250201000001_create_fcm_notification_preferences.rb` — `fcm_notification_preferences` table (user_id unique, muted_categories JSON text)
+- **Model:** `app/models/discourse_fcm_notifications/fcm_notification_preference.rb` — `CATEGORIES` constant maps 11 category keys to Discourse notification type IDs, `muted?()` checks if a type is in a muted category
+- **Filter:** `Pusher.push()` checks user preferences before sending — muted types are skipped and logged as "Filtered"
+- **API:** `GET/PUT /fcm_notifications/preferences` endpoints in `push_controller.rb`
+
+### Client-Side (Flutter App)
+- **Provider:** `notification_preferences_provider.dart` — Riverpod AsyncNotifier, server sync with optimistic updates, SharedPreferences cache fallback
+- **Screen:** `notification_preferences_screen.dart` — Switch toggles for 11 categories matching settings UI style
+- **Settings:** "Notifications" tile added to Preferences section (amber bell icon, shows muted count)
+- **Suppression:** `FCMService.shouldSuppressNotification` callback prevents foreground local notifications for muted categories
+
+### Categories (11)
+replies, mentions, quotes, likes, private_messages, chat, following, watching, badges, bookmarks, linked
+
+---
+
+## Phase 8: Flutter App Updates ✅ Complete
 
 The Flutter app should be updated to send platform info when registering tokens:
 

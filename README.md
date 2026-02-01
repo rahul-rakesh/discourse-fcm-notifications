@@ -28,4 +28,53 @@ The push notifications that this app creates will include:
 }
 ````
 
-So you need to display the push notification with title/body and tapping on it should open the URL from linked_obj_data in an in-app browser. 
+So you need to display the push notification with title/body and tapping on it should open the URL from linked_obj_data in an in-app browser.
+
+# Notification Preferences (Per-Category Muting)
+
+Users can mute specific notification categories to stop receiving push notifications for those types. Muted notifications are filtered server-side before sending to FCM.
+
+## API Endpoints
+
+**GET** `/fcm_notifications/preferences` — Returns current preference state:
+```json
+{
+  "categories": {
+    "replies": true,
+    "mentions": true,
+    "quotes": true,
+    "likes": false,
+    "private_messages": true,
+    "chat": false,
+    "following": true,
+    "watching": true,
+    "badges": true,
+    "bookmarks": true,
+    "linked": true
+  }
+}
+```
+
+**PUT** `/fcm_notifications/preferences` — Update muted categories:
+```json
+{
+  "muted_categories": ["likes", "chat"]
+}
+```
+
+## Available Categories
+
+| Category Key | Discourse Notification Type IDs |
+|---|---|
+| replies | 2 |
+| mentions | 1, 15 |
+| quotes | 3 |
+| likes | 5, 25 |
+| private_messages | 6, 7 |
+| chat | 29, 30, 31, 32, 33 |
+| following | 800, 801, 802 |
+| watching | 9, 17, 36 |
+| badges | 12 |
+| bookmarks | 18, 24 |
+| linked | 11, 39 |
+
