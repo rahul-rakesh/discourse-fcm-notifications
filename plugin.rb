@@ -8,10 +8,12 @@
 
 enabled_site_setting :fcm_notifications_enabled
 
-gem "signet", "0.17.0"
+gem "signet", "0.21.0"
 gem "os", "1.1.4"
 gem "memoist", "0.16.2"
-gem "googleauth", "1.7.0"
+gem "google-cloud-env", "2.3.1"
+gem "google-logging-utils", "0.2.0"
+gem "googleauth", "1.15.1"
 gem "fcm", "1.0.8"
 
 module ::DiscourseFcmNotifications
