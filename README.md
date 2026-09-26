@@ -75,7 +75,7 @@ end
 
 Symbol or string keys both work. `notification_type`, `topic_id` and `post_number` are always taken from the row.
 
-**`fcm_notifications_push_category`** `(category, payload, user) -> category key or nil`: file a push core sends under one of your categories, so the member's switch for that category governs it instead of the one for its type (a plugin's automatic private messages, for one). Return `category` when it is already set.
+**`fcm_notifications_push_category`** `(category, payload, user) -> category key or nil`: file a push core sends under one of your categories, so the member's switch for that category stops it too (a plugin's automatic private messages, for one). It adds a mute and never lifts one: the push is still stopped by the switch for its type, so a member who turned that off, perhaps on an app build that cannot show your category, keeps it off. Return `category` when it is already set.
 
 # Notification Preferences (Per-Category Muting)
 

@@ -128,7 +128,7 @@ module DiscourseFcmNotifications
       private
 
       # A plugin may file a push core sends under one of its own categories, so the member's
-      # switch for that category governs it rather than the one for its type.
+      # switch for that category stops it as well as the one for its type.
       def push_category(user, payload)
         DiscoursePluginRegistry.apply_modifier(:fcm_notifications_push_category, nil, payload, user)
       end

@@ -78,11 +78,12 @@ module DiscourseFcmNotifications
     end
 
     # category: a category a plugin filed this push under (the fcm_notifications_push_category
-    # modifier), which governs it in place of its type's.
+    # modifier). It adds a mute and never lifts one, so a member who muted the type's own
+    # category, perhaps on a build that cannot show the plugin's, still gets no such push.
     def muted?(notification_type_id, category: nil)
       categories = self.class.categories
       muted = muted_categories_list(categories.keys)
-      return muted.include?(category.to_s) if category.present? && categories.key?(category.to_s)
+      return true if category.present? && muted.include?(category.to_s)
 
       type_id = notification_type_id.to_i
       muted.any? { |category_key| categories[category_key]&.include?(type_id) }

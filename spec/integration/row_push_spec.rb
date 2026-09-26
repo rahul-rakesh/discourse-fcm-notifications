@@ -272,12 +272,17 @@ RSpec.describe "Pushing a plugin's notification rows" do # rubocop:disable RSpec
       )
     end
 
-    it "follows the plugin's switch, not the private messages switch" do
-      mute("private_messages")
+    it "stops when the plugin's switch or the private messages switch is off" do
       expect(push_message).to eq(true)
 
       mute("spec_plugin")
       expect(push_message).to eq(false)
+
+      mute("private_messages")
+      expect(push_message).to eq(false)
+
+      mute("likes")
+      expect(push_message).to eq(true)
     end
   end
 end

@@ -83,14 +83,22 @@ RSpec.describe DiscourseFcmNotifications::FcmNotificationPreference do
     expect(JSON.parse(preference.muted_categories)).to eq(["likes"])
   end
 
-  it "lets a push filed under a plugin's category follow that category" do
+  it "mutes a push filed under a plugin's category when that category is muted" do
     preference = preference_muting("spec_plugin")
     private_message = Notification.types[:private_message]
 
     expect(preference.muted?(private_message)).to eq(false)
     expect(preference.muted?(private_message, category: "spec_plugin")).to eq(true)
+  end
+
+  # An installed app that cannot show the plugin's category must not lose the mute it has.
+  it "keeps a push filed under a plugin's category muted by its type's own category" do
+    private_message = Notification.types[:private_message]
 
     preference = preference_muting("private_messages")
+    expect(preference.muted?(private_message, category: "spec_plugin")).to eq(true)
+
+    preference = preference_muting("likes")
     expect(preference.muted?(private_message, category: "spec_plugin")).to eq(false)
   end
 
