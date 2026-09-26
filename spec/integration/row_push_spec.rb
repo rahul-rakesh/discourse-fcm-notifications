@@ -3,7 +3,7 @@
 # A plugin's own notification rows: core never pushes them, so this plugin does, for the types
 # a plugin has put in a push category, with the words that plugin gives. The spec plays the
 # plugin: its category holds core's `custom` type, which core never pushes itself.
-RSpec.describe "Pushing a plugin's notification rows" do # rubocop:disable RSpec/DescribeClass
+RSpec.describe "Pushing a plugin's notification rows" do
   fab!(:user)
   fab!(:topic) { Fabricate(:topic, title: "An RTX 3080 and a monitor stand") }
 

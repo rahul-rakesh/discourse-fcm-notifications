@@ -321,10 +321,9 @@ module DiscourseFcmNotifications
       def build_fcm_message(token, message_content)
         message = {
           token: token,
-          data: {
-            "linked_obj_type" => "link",
-            "linked_obj_data" => message_content[:url],
-          }.merge(message_content[:data] || {}),
+          data: { "linked_obj_type" => "link", "linked_obj_data" => message_content[:url] }.merge(
+            message_content[:data] || {},
+          ),
           notification: {
             title: message_content[:title],
             body: message_content[:message],

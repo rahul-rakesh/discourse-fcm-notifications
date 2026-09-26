@@ -48,13 +48,15 @@ module DiscourseFcmNotifications
       return {} unless offered.respond_to?(:each_pair)
 
       taken = core_type_ids
-      offered.each_pair.with_object({}) do |(key, type_ids), categories|
+      categories = {}
+      offered.each_pair do |key, type_ids|
         key = key.to_s
         next if key.blank? || CATEGORIES.key?(key)
 
         ids = Array(type_ids).map(&:to_i).select(&:positive?).uniq - taken
         categories[key] = ids if ids.any?
       end
+      categories
     end
 
     # The notification types that are pushed as rows: every type a plugin category holds.
