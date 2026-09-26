@@ -13,6 +13,8 @@ module DiscourseFcmNotifications
     ROW_PUSH_DELAY = 60.seconds
     # APNs refuses a longer apns-collapse-id.
     TAG_MAX_BYTES = 64
+    # A payload marked once_a_day reaches a member at most once in this time for its type.
+    ONCE_A_DAY = 24.hours
 
     class << self
       def push(user, payload)
@@ -41,22 +43,11 @@ module DiscourseFcmNotifications
 
         message_content = build_message(payload)
 
-        success_count = 0
-        tokens.each do |fcm_token|
-          result =
-            send_to_token(
-              user: user,
-              fcm_token: fcm_token,
-              message_content: message_content,
-              notification_type: notification_type,
-            )
-          success_count += 1 if result
+        if payload[:once_a_day] && notification_type
+          return send_once_a_day(user, tokens, message_content, notification_type)
         end
 
-        log_info(
-          "Sent to #{success_count}/#{tokens.count} devices for #{user.username} (notification_type: #{notification_type})",
-        )
-        success_count > 0
+        send_to_tokens(user, tokens, message_content, notification_type)
       end
 
       # A plugin's own notification row, which core never pushes. It is pushed only while a
@@ -131,6 +122,51 @@ module DiscourseFcmNotifications
       # switch for that category stops it as well as the one for its type.
       def push_category(user, payload)
         DiscoursePluginRegistry.apply_modifier(:fcm_notifications_push_category, nil, payload, user)
+      end
+
+      def send_to_tokens(user, tokens, message_content, notification_type)
+        success_count = 0
+        tokens.each do |fcm_token|
+          result =
+            send_to_token(
+              user: user,
+              fcm_token: fcm_token,
+              message_content: message_content,
+              notification_type: notification_type,
+            )
+          success_count += 1 if result
+        end
+
+        log_info(
+          "Sent to #{success_count}/#{tokens.count} devices for #{user.username} (notification_type: #{notification_type})",
+        )
+        success_count > 0
+      end
+
+      # Only a push that reached a device counts, so a row that was never sent (read in time,
+      # muted, failed) holds nothing back. The rows of a burst are pushed by jobs that run
+      # together; the lock makes each one see the push the one before it sent.
+      def send_once_a_day(user, tokens, message_content, notification_type)
+        DistributedMutex.synchronize(
+          "fcm_notifications_once_a_day_#{user.id}_#{notification_type}",
+        ) do
+          if sent_since?(user, notification_type, ONCE_A_DAY.ago)
+            log_info(
+              "Held back #{notification_type} for #{user.username} - one was sent in the last day",
+            )
+            next false
+          end
+
+          send_to_tokens(user, tokens, message_content, notification_type)
+        end
+      end
+
+      def sent_since?(user, notification_type, time)
+        FcmNotificationLog
+          .for_user(user.id)
+          .where(notification_type: notification_type.to_s, status: "sent")
+          .since(time)
+          .exists?
       end
 
       def send_to_token(user:, fcm_token:, message_content:, notification_type:)

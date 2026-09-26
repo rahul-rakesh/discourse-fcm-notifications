@@ -10,7 +10,9 @@ RSpec.describe "Pushing a plugin's notification rows" do # rubocop:disable RSpec
   let(:plugin_instance) { Plugin::Instance.new }
   let(:custom_type) { Notification.types[:custom] }
   # What the pretend plugin does, changed by an example rather than by re-registering.
-  let(:plugin_state) { { offers_category: true, gives_words: true, words_asked_for: [] } }
+  let(:plugin_state) do
+    { offers_category: true, gives_words: true, once_a_day: false, words_asked_for: [] }
+  end
   let(:categories_modifier) do
     state = plugin_state
     type_id = custom_type
@@ -35,6 +37,7 @@ RSpec.describe "Pushing a plugin's notification rows" do # rubocop:disable RSpec
           "item_id" => 42,
         },
         tag: "spec-trade-7",
+        once_a_day: state[:once_a_day],
       }
     end
   end
@@ -229,6 +232,71 @@ RSpec.describe "Pushing a plugin's notification rows" do # rubocop:disable RSpec
     run_job(row)
 
     expect(sent).to be_empty
+  end
+
+  describe "a row the plugin marks once a day" do
+    before do
+      give_token
+      plugin_state[:once_a_day] = true
+    end
+
+    it "sends the member's first, holds back the rest for a day, then sends again" do
+      run_job(row)
+      run_job(row)
+      expect(sent.size).to eq(1)
+
+      freeze_time(DiscourseFcmNotifications::Pusher::ONCE_A_DAY.from_now + 1.minute)
+      run_job(row)
+      expect(sent.size).to eq(2)
+    end
+
+    it "counts only a push that was sent: a row read in time holds nothing back" do
+      read = row
+      read.update!(read: true)
+      run_job(read)
+
+      run_job(row)
+      expect(sent.size).to eq(1)
+    end
+
+    it "counts no push that failed on every device" do
+      working = DiscourseFcmNotifications::Pusher.send(:get_fcm_client)
+      failing = mock
+      failing.stubs(:send_v1).returns(response: "failure", status_code: 500, body: "down")
+
+      DiscourseFcmNotifications::Pusher.stubs(:get_fcm_client).returns(failing)
+      run_job(row)
+      expect(DiscourseFcmNotifications::FcmNotificationLog.where(status: "failed").count).to eq(1)
+
+      DiscourseFcmNotifications::Pusher.stubs(:get_fcm_client).returns(working)
+      run_job(row)
+      expect(sent.size).to eq(1)
+    end
+
+    it "counts no push the member muted" do
+      preference = DiscourseFcmNotifications::FcmNotificationPreference.for_user(user.id)
+      preference.muted_categories_list = ["spec_plugin"]
+      preference.save!
+      run_job(row)
+
+      preference.muted_categories_list = []
+      preference.save!
+      run_job(row)
+      expect(sent.size).to eq(1)
+    end
+
+    it "holds back neither another member nor a push without the mark" do
+      other = Fabricate(:user)
+      give_token(other)
+
+      run_job(row)
+      run_job(row(member: other))
+      expect(sent.size).to eq(2)
+
+      plugin_state[:once_a_day] = false
+      run_job(row)
+      expect(sent.size).to eq(3)
+    end
   end
 
   describe "a push core sends, filed under a plugin's category" do

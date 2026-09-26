@@ -72,6 +72,7 @@ end
 | `post_url` | a path starting with `/`, linked as `linked_obj_data` |
 | `push_data` | extra data keys, such as `url` and `item_id`; values sent as strings |
 | `tag` | a collapse tag (64 bytes at most): a newer push with the same tag replaces the older one in the phone's tray (`android.notification.tag`, `apns-collapse-id`) |
+| `once_a_day` | `true` for a type written in bulk: the member gets at most one push of the type in 24 hours (`Pusher::ONCE_A_DAY`). Only a push that reached a device counts, so a row that was never sent holds nothing back |
 
 Symbol or string keys both work. `notification_type`, `topic_id` and `post_number` are always taken from the row.
 
