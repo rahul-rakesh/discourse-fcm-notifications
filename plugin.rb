@@ -34,6 +34,24 @@ after_initialize do
     end
   end
 
+  # A plugin's own notification rows never pass core's push path. One reaches the phone only
+  # when a plugin has put its type in a push category, so the member can always turn it off,
+  # and a minute late, so a row withdrawn or read on the site by then is not pushed.
+  on(:notification_created) do |notification|
+    if DiscourseFcmNotifications::FcmNotificationPreference.plugin_type_ids.include?(
+         notification.notification_type,
+       )
+      Jobs.enqueue_in(
+        DiscourseFcmNotifications::Pusher::ROW_PUSH_DELAY,
+        :send_fcm_notification_row,
+        notification_id: notification.id,
+      )
+    end
+  rescue StandardError => e
+    # A push that cannot be queued never fails the act that wrote the row.
+    Rails.logger.warn("[FCM] row push not queued for notification #{notification&.id}: #{e.class}")
+  end
+
   # Job to send FCM notifications
   module ::Jobs
     class SendFcmNotifications < ::Jobs::Base
@@ -44,6 +62,17 @@ after_initialize do
         return unless user
 
         DiscourseFcmNotifications::Pusher.push(user, args[:payload])
+      end
+    end
+
+    class SendFcmNotificationRow < ::Jobs::Base
+      def execute(args)
+        return unless SiteSetting.fcm_notifications_enabled?
+
+        notification = Notification.find_by(id: args[:notification_id])
+        return if notification.nil? || notification.read?
+
+        DiscourseFcmNotifications::Pusher.push_row(notification)
       end
     end
 

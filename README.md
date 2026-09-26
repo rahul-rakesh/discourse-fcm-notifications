@@ -37,11 +37,53 @@ An app that reads only `linked_obj_data` can keep opening it in an in-app browse
 
 A plugin may add its own keys to the data through the payload's `push_data` hash. They never replace `linked_obj_type`, `linked_obj_data` or the three routing keys, and empty values are left out.
 
+# Pushes for a plugin's own notifications
+
+Core pushes only the notifications it alerts on itself (replies, mentions, private messages and the like). A plugin that writes its own notification rows with `Notification.create!` gets no push from core. This plugin pushes such a row when, and only when, a plugin has put the row's type in a push category, so the member can always turn it off.
+
+How it works:
+
+1. Core announces every new row (`:notification_created`). If the row's type is in a plugin category, a job is queued **60 seconds** later (`Pusher::ROW_PUSH_DELAY`).
+2. The job re-reads the row. A row deleted in the meantime (withdrawn) or already read on the site is not pushed. Nor is a row whose member is suspended, in do-not-disturb, or has no active app token.
+3. The job asks the plugins for the push's words. A row no plugin gives words for is not pushed.
+4. The push goes through the same mute check, log and send as every other push, with the row's own `notification_type`, `topic_id` and `post_number`.
+
+A push already delivered cannot be taken back: a row withdrawn after its push stays on the phone until the member dismisses it.
+
+## The modifiers a plugin registers
+
+All three are core modifiers (`register_modifier` in the plugin's `plugin.rb`). A modifier runs only while its plugin is enabled.
+
+**`fcm_notifications_plugin_categories`** `(categories) -> categories`: add `{ "key" => [type_id, ...] }` for each category the plugin offers. A plugin category never takes a key of the list below, never holds a type of that list or a type core pushes itself (`PostAlerter::NOTIFIABLE_TYPES`), and is dropped when empty. This plugin cannot see every type other code pushes through core's path, so a plugin must not offer one that is already pushed.
+
+```ruby
+register_modifier(:fcm_notifications_plugin_categories) do |categories|
+  categories.merge("market" => [920, 921, 922])
+end
+```
+
+**`fcm_notifications_row_payload`** `(payload, notification) -> payload or nil`: return `payload` when it is already set (another plugin answered), otherwise a hash for a row of yours, or nil for no push:
+
+| Key | |
+|---|---|
+| `excerpt` | the body (required) |
+| `translated_title` | the title; otherwise the usual title from `topic_title` and `username` |
+| `topic_title` | |
+| `post_url` | a path starting with `/`, linked as `linked_obj_data` |
+| `push_data` | extra data keys, such as `url` and `item_id`; values sent as strings |
+| `tag` | a collapse tag (64 bytes at most): a newer push with the same tag replaces the older one in the phone's tray (`android.notification.tag`, `apns-collapse-id`) |
+
+Symbol or string keys both work. `notification_type`, `topic_id` and `post_number` are always taken from the row.
+
+**`fcm_notifications_push_category`** `(category, payload, user) -> category key or nil`: file a push core sends under one of your categories, so the member's switch for that category governs it instead of the one for its type (a plugin's automatic private messages, for one). Return `category` when it is already set.
+
 # Notification Preferences (Per-Category Muting)
 
 Users can mute specific notification categories to stop receiving push notifications for those types. Muted notifications are filtered server-side before sending to FCM.
 
 ## API Endpoints
+
+A plugin category (above) is listed beside these, on until the member turns it off, and stored in the same list of muted keys.
 
 **GET** `/fcm_notifications/preferences` — Returns current preference state:
 ```json

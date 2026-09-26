@@ -8,6 +8,11 @@ module DiscourseFcmNotifications
     # beside the link, which builds that read only the link keep using.
     ROUTING_KEYS = %w[notification_type topic_id post_number].freeze
     LINK_KEYS = %w[linked_obj_type linked_obj_data].freeze
+    # A plugin's row is pushed this long after it is written, so a row withdrawn or read on the
+    # site in the meantime never reaches the phone. A push already delivered cannot be taken back.
+    ROW_PUSH_DELAY = 60.seconds
+    # APNs refuses a longer apns-collapse-id.
+    TAG_MAX_BYTES = 64
 
     class << self
       def push(user, payload)
@@ -26,7 +31,8 @@ module DiscourseFcmNotifications
 
         # Check user notification preferences - skip if this type is muted
         preference = FcmNotificationPreference.for_user(user.id)
-        if preference.persisted? && preference.muted?(raw_type_id)
+        category = push_category(user, payload)
+        if preference.persisted? && preference.muted?(raw_type_id, category: category)
           log_info(
             "Filtered notification for #{user.username} (type: #{notification_type}, raw_id: #{raw_type_id}) - muted by user preference",
           )
@@ -51,6 +57,35 @@ module DiscourseFcmNotifications
           "Sent to #{success_count}/#{tokens.count} devices for #{user.username} (notification_type: #{notification_type})",
         )
         success_count > 0
+      end
+
+      # A plugin's own notification row, which core never pushes. It is pushed only while a
+      # plugin category holds its type and a plugin gives its words; the member's mute and the
+      # send are push's own.
+      def push_row(notification)
+        return false if notification.nil?
+
+        type_id = notification.notification_type
+        return false if FcmNotificationPreference.plugin_type_ids.exclude?(type_id)
+
+        user = notification.user
+        # Core's own pushes skip these members too (PostAlerter).
+        return false if user.nil? || user.suspended? || user.do_not_disturb?
+        # Checked before the words, so a member without the app costs nothing more.
+        return false unless FcmToken.active.for_user(user.id).exists?
+
+        payload =
+          DiscoursePluginRegistry.apply_modifier(:fcm_notifications_row_payload, nil, notification)
+        return false unless payload.is_a?(Hash)
+
+        push(
+          user,
+          payload.with_indifferent_access.merge(
+            notification_type: type_id,
+            topic_id: notification.topic_id,
+            post_number: notification.post_number,
+          ),
+        )
       end
 
       def confirm_subscribe(user, fcm_token)
@@ -91,6 +126,12 @@ module DiscourseFcmNotifications
       end
 
       private
+
+      # A plugin may file a push core sends under one of its own categories, so the member's
+      # switch for that category governs it rather than the one for its type.
+      def push_category(user, payload)
+        DiscoursePluginRegistry.apply_modifier(:fcm_notifications_push_category, nil, payload, user)
+      end
 
       def send_to_token(user:, fcm_token:, message_content:, notification_type:)
         log_entry =
@@ -170,8 +211,10 @@ module DiscourseFcmNotifications
         topic_title = payload[:topic_title].to_s
         username = payload[:username].to_s
 
-        # Smart title: try specific translation, fallback to generic with topic title
-        title =
+        # A title the payload already gives, as core's web push takes one; otherwise the
+        # smart title: try specific translation, fallback to generic with topic title
+        title = payload[:translated_title].presence
+        title ||=
           I18n.t(
             "discourse_fcm_notifications.popup.#{notification_type}",
             site_title: SiteSetting.title,
@@ -200,7 +243,13 @@ module DiscourseFcmNotifications
           message: clean_excerpt,
           url: link_for(payload[:post_url]),
           data: routing_data(payload),
+          tag: collapse_tag(payload[:tag]),
         }
+      end
+
+      # A newer push with the same tag replaces the older one in the phone's tray.
+      def collapse_tag(tag)
+        tag.to_s.byteslice(0, TAG_MAX_BYTES).to_s.scrub("").presence
       end
 
       # Post#url is a path that already starts with "/", so the site address is joined without
@@ -234,7 +283,7 @@ module DiscourseFcmNotifications
       end
 
       def build_fcm_message(token, message_content)
-        {
+        message = {
           token: token,
           data: {
             "linked_obj_type" => "link",
@@ -259,6 +308,13 @@ module DiscourseFcmNotifications
             },
           },
         }
+
+        if (tag = message_content[:tag]).present?
+          message[:android][:notification] = { tag: tag }
+          message[:apns][:headers][:"apns-collapse-id"] = tag
+        end
+
+        message
       end
 
       def get_fcm_client

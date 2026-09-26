@@ -29,30 +29,70 @@ module DiscourseFcmNotifications
       find_or_initialize_by(user_id: user_id)
     end
 
-    def muted_categories_list
+    # Every category a member can turn off: the ones above, then any a plugin offers for its own
+    # notification rows through the fcm_notifications_plugin_categories modifier.
+    def self.categories
+      CATEGORIES.merge(plugin_categories)
+    end
+
+    def self.category_keys
+      categories.keys
+    end
+
+    # A plugin category never takes a key above, and never holds a type above or one core pushes
+    # itself (PostAlerter::NOTIFIABLE_TYPES): those already reach the phone through core's push,
+    # and pushing them as rows too would send them twice. This is what can be checked here; a
+    # plugin must not offer a type that some other code pushes through core's path.
+    def self.plugin_categories
+      offered = DiscoursePluginRegistry.apply_modifier(:fcm_notifications_plugin_categories, {})
+      return {} unless offered.respond_to?(:each_pair)
+
+      taken = core_type_ids
+      offered.each_pair.with_object({}) do |(key, type_ids), categories|
+        key = key.to_s
+        next if key.blank? || CATEGORIES.key?(key)
+
+        ids = Array(type_ids).map(&:to_i).select(&:positive?).uniq - taken
+        categories[key] = ids if ids.any?
+      end
+    end
+
+    # The notification types that are pushed as rows: every type a plugin category holds.
+    def self.plugin_type_ids
+      plugin_categories.values.flatten.uniq
+    end
+
+    def self.core_type_ids
+      CATEGORIES.values.flatten | PostAlerter::NOTIFIABLE_TYPES
+    end
+
+    def muted_categories_list(keys = self.class.category_keys)
       return [] if muted_categories.blank?
-      JSON.parse(muted_categories).select { |c| CATEGORY_KEYS.include?(c) }
+      JSON.parse(muted_categories).select { |c| keys.include?(c) }
     rescue JSON::ParserError
       []
     end
 
     def muted_categories_list=(list)
-      self.muted_categories = (list & CATEGORY_KEYS).to_json
+      self.muted_categories = (list & self.class.category_keys).to_json
     end
 
-    def muted?(notification_type_id)
+    # category: a category a plugin filed this push under (the fcm_notifications_push_category
+    # modifier), which governs it in place of its type's.
+    def muted?(notification_type_id, category: nil)
+      categories = self.class.categories
+      muted = muted_categories_list(categories.keys)
+      return muted.include?(category.to_s) if category.present? && categories.key?(category.to_s)
+
       type_id = notification_type_id.to_i
-      muted_categories_list.any? do |category_key|
-        CATEGORIES[category_key]&.include?(type_id)
-      end
+      muted.any? { |category_key| categories[category_key]&.include?(type_id) }
     end
 
     # Returns hash of category => enabled (true/false)
     def categories_hash
-      muted = muted_categories_list
-      CATEGORY_KEYS.each_with_object({}) do |key, hash|
-        hash[key] = !muted.include?(key)
-      end
+      keys = self.class.category_keys
+      muted = muted_categories_list(keys)
+      keys.each_with_object({}) { |key, hash| hash[key] = !muted.include?(key) }
     end
   end
 end
