@@ -21,6 +21,9 @@ The push notifications that this app creates will include:
 'data': {
   "linked_obj_type" => 'link',
   "linked_obj_data" => <url to the post/message referenced in the message>,
+  "notification_type" => <the Discourse notification type id, e.g. "6" for a private message>,
+  "topic_id" => <the topic's id>,
+  "post_number" => <the post's number in the topic>,
 },
 'notification': {
   title: <something like "USERNAME sent you a private message in TOPIC">,
@@ -28,7 +31,11 @@ The push notifications that this app creates will include:
 }
 ````
 
-So you need to display the push notification with title/body and tapping on it should open the URL from linked_obj_data in an in-app browser.
+Every data value is a string, as FCM requires. `notification_type`, `topic_id` and `post_number` are sent only when the notification has them; the confirmation push sent on subscribing has none of the three. `linked_obj_data` is the site address followed by the post's path, with one slash between them.
+
+An app that reads only `linked_obj_data` can keep opening it in an in-app browser. An app that reads `notification_type` can route the tap itself: a private message (6) to the conversation, a reply to the post, and so on.
+
+A plugin may add its own keys to the data through the payload's `push_data` hash. They never replace `linked_obj_type`, `linked_obj_data` or the three routing keys, and empty values are left out.
 
 # Notification Preferences (Per-Category Muting)
 

@@ -4,10 +4,16 @@ require "net/https"
 
 module DiscourseFcmNotifications
   class Pusher
+    # The push data that routes a tap: which notification, topic and post it names. Sent
+    # beside the link, which builds that read only the link keep using.
+    ROUTING_KEYS = %w[notification_type topic_id post_number].freeze
+    LINK_KEYS = %w[linked_obj_type linked_obj_data].freeze
+
     class << self
       def push(user, payload)
         return false unless user && payload
 
+        payload = payload.to_h.with_indifferent_access
         tokens = FcmToken.active.for_user(user.id)
 
         if tokens.empty?
@@ -192,8 +198,39 @@ module DiscourseFcmNotifications
         {
           title: title,
           message: clean_excerpt,
-          url: "#{Discourse.base_url}/#{payload[:post_url]}",
+          url: link_for(payload[:post_url]),
+          data: routing_data(payload),
         }
+      end
+
+      # Post#url is a path that already starts with "/", so the site address is joined without
+      # another slash. A push that names no post links the site itself.
+      def link_for(post_url)
+        path = post_url.to_s
+        return Discourse.base_url.to_s if path.blank?
+
+        path.start_with?("/") ? "#{Discourse.base_url}#{path}" : "#{Discourse.base_url}/#{path}"
+      end
+
+      # FCM takes string values only. The routing keys come from the push itself; a payload's
+      # own push_data adds keys beside them and never replaces them or the link.
+      def routing_data(payload)
+        data = {}
+        ROUTING_KEYS.each do |key|
+          value = payload[key]
+          data[key] = value.to_s if value.present?
+        end
+
+        extra = payload[:push_data]
+        if extra.respond_to?(:each_pair)
+          extra.each_pair do |key, value|
+            key = key.to_s
+            next if value.blank? || data.key?(key) || LINK_KEYS.include?(key)
+            data[key] = value.to_s
+          end
+        end
+
+        data
       end
 
       def build_fcm_message(token, message_content)
@@ -202,7 +239,7 @@ module DiscourseFcmNotifications
           data: {
             "linked_obj_type" => "link",
             "linked_obj_data" => message_content[:url],
-          },
+          }.merge(message_content[:data] || {}),
           notification: {
             title: message_content[:title],
             body: message_content[:message],
